@@ -4,15 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useAuth } from '@/hooks/useAuth';
-import {
-  geoToGrid,
-  gridToGeo,
-  snapToGrid,
-  getVisiblePixels,
-  getPixelScreenSize,
-  canPlacePixelAt,
-  GRID_CONFIG
-} from '@/lib/gridSystem';
+import { GRID_CONFIG } from '@/lib/gridConfig';
 
 // Fix pour les icônes Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -178,7 +170,7 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
     const currentZoom = map.getZoom();
 
     // Ne pas afficher les pixels si le zoom est trop faible
-    if (currentZoom < GRID_CONFIG.MIN_ZOOM_VISIBLE) {
+    if (currentZoom < GRID_CONFIG.ZOOM.MIN_VISIBLE) {
       if (pixelLayerRef.current) {
         map.removeLayer(pixelLayerRef.current);
         pixelLayerRef.current = null;
@@ -474,7 +466,7 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
     });
 
     map.on('mousemove', (e: L.LeafletMouseEvent) => {
-      if (map.getZoom() >= GRID_CONFIG.MIN_ZOOM_VISIBLE) {
+      if (map.getZoom() >= GRID_CONFIG.ZOOM.MIN_VISIBLE) {
         const snapped = snapToGrid(e.latlng.lat, e.latlng.lng);
         setPreviewPixel(snapped);
       } else {
@@ -494,7 +486,7 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
         canPlace: canPlacePixel
       });
 
-      if (isAuthenticated && canPlacePixel && map.getZoom() >= GRID_CONFIG.MIN_ZOOM_VISIBLE) {
+      if (isAuthenticated && canPlacePixel && map.getZoom() >= GRID_CONFIG.ZOOM.MIN_VISIBLE) {
         placePixel(e.latlng.lat, e.latlng.lng);
       }
     });
@@ -566,7 +558,7 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
         style={{
           width: '100%',
           height: '100%',
-          cursor: isAuthenticated && canPlacePixel && zoom >= GRID_CONFIG.MIN_ZOOM_VISIBLE ? 'crosshair' : 'default'
+          cursor: isAuthenticated && canPlacePixel && zoom >= GRID_CONFIG.ZOOM.MIN_VISIBLE ? 'crosshair' : 'default'
         }}
       />
 
@@ -740,10 +732,10 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
             </div>
 
             <div style={{ lineHeight: '1.4', marginBottom: '12px' }}>
-              <div>🔍 Zoom: <strong>{zoom}</strong> {zoom < GRID_CONFIG.MIN_ZOOM_VISIBLE ? '(trop faible pour pixels)' : ''}</div>
+              <div>🔍 Zoom: <strong>{zoom}</strong> {zoom < GRID_CONFIG.ZOOM.MIN_VISIBLE ? '(trop faible pour pixels)' : ''}</div>
               <div>📊 Pixels affichés: <strong>{pixels.length}</strong></div>
               <div>⏱️ Cooldown: {cooldownRemaining > 0 ? `🔴 ${cooldownRemaining}s` : '🟢 Prêt'}</div>
-              <div>🎯 Placement: {isAuthenticated && canPlacePixel && zoom >= GRID_CONFIG.MIN_ZOOM_VISIBLE ? '🟢 Actif' : '🔴 Inactif'}</div>
+              <div>🎯 Placement: {isAuthenticated && canPlacePixel && zoom >= GRID_CONFIG.ZOOM.MIN_VISIBLE ? '🟢 Actif' : '🔴 Inactif'}</div>
             </div>
 
             {previewPixel && (
@@ -761,7 +753,7 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
             )}
 
             <div style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
-              💡 Zoomez à {GRID_CONFIG.MIN_ZOOM_VISIBLE}+ pour voir et placer des pixels
+              💡 Zoomez à {GRID_CONFIG.ZOOM.MIN_VISIBLE}+ pour voir et placer des pixels
             </div>
           </div>
         </>

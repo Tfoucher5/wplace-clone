@@ -1,7 +1,7 @@
 // src/lib/pixelService.ts
 
 import { pool, redis, Pixel } from './database';
-import { geoToGrid, gridToGeo, getChunkKey, getVisibleChunks } from './gridSystem';
+import { geoToGrid, gridToGeo, getChunkKey, getVisibleChunks } from './pixelGridSystem';
 
 export class PixelService {
     /**
