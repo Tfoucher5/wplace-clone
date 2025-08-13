@@ -49,7 +49,7 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
   const pixelLayerRef = useRef<PixelLayer | null>(null);
 
   const [pixels, setPixels] = useState<Pixel[]>([]);
-  const [selectedColor, setSelectedColor] = useState<string>('#FF0000');
+  const [selectedColor, setSelectedColor] = useState<string>('#E50000'); // Rouge par défaut au lieu de #FF0000
   const [zoom, setZoom] = useState<number>(3);
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
   const [canPlacePixel, setCanPlacePixel] = useState<boolean>(true);
@@ -66,6 +66,11 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
     '#E5D900', '#94E044', '#02BE01', '#00D3DD',
     '#0083C7', '#0000EA', '#CF6EE4', '#820080'
   ];
+
+  // Debug : afficher la couleur sélectionnée
+  useEffect(() => {
+    console.log('🎨 Couleur sélectionnée changée:', selectedColor);
+  }, [selectedColor]);
 
   // Simulation WebSocket simplifié
   useEffect(() => {
@@ -113,8 +118,9 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
     }
   }, [isAuthenticated, user?.lastPixelTime]);
 
-  // Charger les pixels depuis localStorage au démarrage
+  // Charger les pixels depuis localStorage ET l'API au démarrage
   useEffect(() => {
+    // Charger depuis localStorage pour l'affichage immédiat
     if (typeof window !== 'undefined') {
       const savedPixels = localStorage.getItem('wplace_pixels');
       if (savedPixels) {
@@ -125,10 +131,36 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
           }));
           setPixels(parsedPixels);
         } catch (error) {
-          console.error('Erreur chargement pixels:', error);
+          console.error('Erreur chargement pixels localStorage:', error);
         }
       }
     }
+
+    // Charger depuis l'API pour avoir les pixels des autres utilisateurs
+    const loadPixelsFromAPI = async () => {
+      try {
+        const response = await fetch('/api/pixels?limit=5000');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data.pixels) {
+            const apiPixels = data.data.pixels.map((p: any) => ({
+              ...p,
+              placedAt: new Date(p.placedAt)
+            }));
+            setPixels(apiPixels);
+
+            // Mettre à jour localStorage avec les données de l'API
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('wplace_pixels', JSON.stringify(apiPixels));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Erreur chargement pixels API:', error);
+      }
+    };
+
+    loadPixelsFromAPI();
   }, []);
 
   // Sauvegarder les pixels dans localStorage
@@ -137,79 +169,6 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
       localStorage.setItem('wplace_pixels', JSON.stringify(pixels));
     }
   }, [pixels]);
-
-  // Placer un pixel
-  const placePixel = useCallback(async (lat: number, lng: number) => {
-    if (!isAuthenticated || !canPlacePixel) {
-      console.log('❌ Cannot place pixel:', { isAuthenticated, canPlacePixel });
-      return;
-    }
-
-    // Snap à la grille
-    const snapped = snapToGrid(lat, lng);
-
-    // Vérifier si un pixel existe déjà à cette position
-    const existingPixel = pixels.find(p => p.gridX === snapped.gridX && p.gridY === snapped.gridY);
-
-    if (existingPixel) {
-      console.log('⚠️ Pixel déjà existant à cette position - remplacement');
-    }
-
-    const newPixel: Pixel = {
-      id: Date.now(), // ID temporaire
-      lat: snapped.lat,
-      lng: snapped.lng,
-      gridX: snapped.gridX,
-      gridY: snapped.gridY,
-      color: selectedColor,
-      username: user?.username || 'Anonyme',
-      placedAt: new Date()
-    };
-
-    try {
-      // Optimistic update - ajouter immédiatement à l'état local
-      setPixels(prev => {
-        const filtered = prev.filter(p => !(p.gridX === newPixel.gridX && p.gridY === newPixel.gridY));
-        return [...filtered, newPixel];
-      });
-
-      // Simuler l'API pour la démo (en mode production, remplacer par un vrai appel API)
-      const simulateApiCall = () => {
-        return new Promise((resolve) => {
-          setTimeout(() => {
-            resolve({
-              success: true,
-              data: {
-                pixel: newPixel,
-                user: {
-                  ...user,
-                  pixelsPlaced: (user?.pixelsPlaced || 0) + 1,
-                  lastPixelTime: newPixel.placedAt.toISOString()
-                }
-              }
-            });
-          }, 100);
-        });
-      };
-
-      const result: any = await simulateApiCall();
-
-      // Callback pour les stats
-      if (onPixelPlaced) {
-        onPixelPlaced(result.data.user.pixelsPlaced);
-      }
-
-      console.log('✅ Pixel placé (simulé):', result);
-
-    } catch (error) {
-      console.error('❌ Erreur placement pixel:', error);
-
-      // Rollback en cas d'erreur
-      setPixels(prev => prev.filter(p => !(p.gridX === newPixel.gridX && p.gridY === newPixel.gridY)));
-
-      alert('Erreur lors du placement du pixel. Veuillez réessayer.');
-    }
-  }, [isAuthenticated, canPlacePixel, selectedColor, pixels, user, onPixelPlaced]);
 
   // Créer et mettre à jour la couche de pixels
   const updatePixelLayer = useCallback(() => {
@@ -230,7 +189,6 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
     // Créer la couche de pixels si elle n'existe pas
     if (!pixelLayerRef.current) {
       const layer = L.layerGroup();
-      // Extension de l'objet avec nos propriétés personnalisées
       const pixelLayer = Object.assign(layer, {
         _pixels: new Map<string, L.Rectangle>()
       }) as PixelLayer;
@@ -270,24 +228,28 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
         const geo = gridToGeo(gridX, gridY);
         const pixelSize = GRID_CONFIG.PIXEL_SIZE_DEGREES;
 
+        // Correction Mercator pour des pixels carrés à l'écran
+        const latCorrectionFactor = Math.cos(geo.lat * Math.PI / 180);
+        const lngSize = pixelSize / latCorrectionFactor; // Plus étroit en longitude
+        const latSize = pixelSize; // Normal en latitude
+
         const rectBounds = L.latLngBounds([
-          [geo.lat - pixelSize / 2, geo.lng - pixelSize / 2],
-          [geo.lat + pixelSize / 2, geo.lng + pixelSize / 2]
+          [geo.lat - latSize / 2, geo.lng - lngSize / 2],
+          [geo.lat + latSize / 2, geo.lng + lngSize / 2]
         ]);
 
-        const color = pixel ? pixel.color : 'rgba(255,255,255,0.1)';
-        const opacity = pixel ? 1 : 0.2;
-
-        const rectangle = L.rectangle(rectBounds, {
-          color: pixel ? color : '#ccc',
-          fillColor: color,
-          fillOpacity: opacity,
-          weight: 1,
-          opacity: opacity
-        });
-
-        // Tooltip avec infos du pixel
         if (pixel) {
+          // Pixel existant - couleur pleine, carré parfait
+          const rectangle = L.rectangle(rectBounds, {
+            color: pixel.color,
+            fillColor: pixel.color,
+            fillOpacity: 1,
+            weight: 1,
+            opacity: 1,
+            interactive: true
+          });
+
+          // Tooltip pour les pixels existants
           rectangle.bindTooltip(`
             <strong>Pixel (${gridX}, ${gridY})</strong><br/>
             Par: ${pixel.username}<br/>
@@ -297,25 +259,181 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
             permanent: false,
             direction: 'top'
           });
-        }
 
-        pixelLayer.addLayer(rectangle);
-        pixelLayer._pixels.set(key, rectangle);
+          pixelLayer.addLayer(rectangle);
+          pixelLayer._pixels.set(key, rectangle);
+        } else {
+          // Grille vide - ajuster avec Mercator pour correspondre aux pixels
+          const latCorrectionFactor = Math.cos(geo.lat * Math.PI / 180);
+          const lngSize = pixelSize / latCorrectionFactor;
+          const latSize = pixelSize;
+
+          // Utiliser la même taille que les pixels pour la grille
+          const gridBounds = L.latLngBounds([
+            [geo.lat - latSize / 2, geo.lng - lngSize / 2],
+            [geo.lat + latSize / 2, geo.lng + lngSize / 2]
+          ]);
+
+          const rectangle = L.rectangle(gridBounds, {
+            color: 'rgba(200,200,200,0.08)', // Lignes très discrètes
+            fillColor: 'transparent', // Pas de fond du tout
+            fillOpacity: 0,
+            weight: 0.2, // Lignes très fines
+            opacity: 0.08,
+            interactive: false,
+            fill: false // Pas de remplissage
+          });
+
+          pixelLayer.addLayer(rectangle);
+          pixelLayer._pixels.set(key, rectangle);
+        }
       }
     });
 
-  }, [pixels]); // Seulement dépendre des pixels, pas du zoom
+  }, [pixels]);
 
-  // Mettre à jour les pixels quand ils changent ou que la vue change
+  // Placer un pixel
+  const placePixel = useCallback(async (lat: number, lng: number) => {
+    if (!isAuthenticated || !canPlacePixel) {
+      console.log('❌ Cannot place pixel:', { isAuthenticated, canPlacePixel });
+      return;
+    }
+
+    // Snap à la grille
+    const snapped = snapToGrid(lat, lng);
+
+    // CAPTURE la couleur au moment du clic pour éviter les problèmes de closure
+    const currentColor = selectedColor;
+
+    console.log('🎯 Placement pixel:', {
+      position: [snapped.gridX, snapped.gridY],
+      couleur: currentColor,
+      coords: [snapped.lat.toFixed(6), snapped.lng.toFixed(6)]
+    });
+
+    const newPixel: Pixel = {
+      id: Date.now(),
+      lat: snapped.lat,
+      lng: snapped.lng,
+      gridX: snapped.gridX,
+      gridY: snapped.gridY,
+      color: currentColor, // Utiliser la couleur capturée
+      username: user?.username || 'Anonyme',
+      placedAt: new Date()
+    };
+
+    try {
+      // Optimistic update avec forçage immédiat de re-rendu
+      setPixels(prev => {
+        const filtered = prev.filter(p => !(p.gridX === newPixel.gridX && p.gridY === newPixel.gridY));
+        return [...filtered, newPixel];
+      });
+
+      // Forcer la mise à jour de la couche IMMÉDIATEMENT
+      setTimeout(() => {
+        if (pixelLayerRef.current && mapInstanceRef.current) {
+          const map = mapInstanceRef.current;
+          const key = `${newPixel.gridX},${newPixel.gridY}`;
+
+          // Supprimer l'ancien rectangle de grille vide s'il existe
+          const existingRect = pixelLayerRef.current._pixels.get(key);
+          if (existingRect) {
+            pixelLayerRef.current.removeLayer(existingRect);
+          }
+
+          // Créer immédiatement le nouveau pixel carré visuellement
+          const geo = gridToGeo(newPixel.gridX, newPixel.gridY);
+          const pixelSize = GRID_CONFIG.PIXEL_SIZE_DEGREES;
+
+          // Correction Mercator pour pixels carrés à l'écran
+          const latCorrectionFactor = Math.cos(geo.lat * Math.PI / 180);
+          const lngSize = pixelSize / latCorrectionFactor;
+          const latSize = pixelSize;
+
+          const rectBounds = L.latLngBounds([
+            [geo.lat - latSize / 2, geo.lng - lngSize / 2],
+            [geo.lat + latSize / 2, geo.lng + lngSize / 2]
+          ]);
+
+          const rectangle = L.rectangle(rectBounds, {
+            color: newPixel.color,
+            fillColor: newPixel.color,
+            fillOpacity: 1,
+            weight: 1,
+            opacity: 1,
+            interactive: true
+          });
+
+          rectangle.bindTooltip(`
+            <strong>Pixel (${newPixel.gridX}, ${newPixel.gridY})</strong><br/>
+            Par: ${newPixel.username}<br/>
+            Couleur: ${newPixel.color}<br/>
+            Placé: ${newPixel.placedAt.toLocaleString()}
+          `, {
+            permanent: false,
+            direction: 'top'
+          });
+
+          pixelLayerRef.current.addLayer(rectangle);
+          pixelLayerRef.current._pixels.set(key, rectangle);
+        }
+      }, 1);
+
+      // Appeler l'API pour persister en base de données
+      const response = await fetch('/api/pixels', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('wplace_auth_token')}`
+        },
+        body: JSON.stringify({
+          lat: newPixel.lat,
+          lng: newPixel.lng,
+          gridX: newPixel.gridX,
+          gridY: newPixel.gridY,
+          color: newPixel.color // Utiliser la couleur du pixel créé
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Erreur sauvegarde pixel en base');
+      }
+
+      const result = await response.json();
+      console.log('✅ Pixel sauvegardé en base:', result);
+
+      if (onPixelPlaced) {
+        onPixelPlaced((user?.pixelsPlaced || 0) + 1);
+      }
+
+    } catch (error) {
+      console.error('❌ Erreur placement pixel:', error);
+
+      // Rollback en cas d'erreur
+      setPixels(prev => prev.filter(p => !(p.gridX === newPixel.gridX && p.gridY === newPixel.gridY)));
+
+      // Remettre la grille vide
+      setTimeout(() => {
+        updatePixelLayer();
+      }, 10);
+
+      alert('Erreur lors du placement du pixel. Veuillez réessayer.');
+    }
+  }, [isAuthenticated, canPlacePixel, selectedColor, user, onPixelPlaced, updatePixelLayer]);
+
+  // Mettre à jour les pixels quand ils changent
   useEffect(() => {
-    updatePixelLayer();
-  }, [pixels, zoom]); // Appeler updatePixelLayer quand le zoom ou les pixels changent
+    const timeoutId = setTimeout(() => {
+      updatePixelLayer();
+    }, 100);
+
+    return () => clearTimeout(timeoutId);
+  }, [pixels, zoom, updatePixelLayer]);
 
   // Initialiser la carte
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
-    // Supprimer la carte existante
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove();
       mapInstanceRef.current = null;
@@ -324,7 +442,6 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
 
     console.log('🗺️ Initialisation de la carte...');
 
-    // Créer la carte
     const map = L.map(mapContainerRef.current, {
       center: [20, 0],
       zoom: 3,
@@ -338,7 +455,6 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
       maxBoundsViscosity: 1.0
     });
 
-    // Tuiles de base
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
       noWrap: false,
@@ -352,7 +468,9 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
     map.on('zoomend moveend', () => {
       const currentZoom = map.getZoom();
       setZoom(currentZoom);
-      // Ne pas appeler updatePixelLayer ici pour éviter les boucles
+      setTimeout(() => {
+        updatePixelLayer();
+      }, 150);
     });
 
     map.on('mousemove', (e: L.LeafletMouseEvent) => {
@@ -365,8 +483,12 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
     });
 
     map.on('click', (e: L.LeafletMouseEvent) => {
+      // Debug du clic pour vérifier l'alignement
+      const snapped = snapToGrid(e.latlng.lat, e.latlng.lng);
       console.log('🖱️ Clic carte:', {
-        coords: [e.latlng.lat, e.latlng.lng],
+        original: [e.latlng.lat.toFixed(6), e.latlng.lng.toFixed(6)],
+        snapped: [snapped.lat.toFixed(6), snapped.lng.toFixed(6)],
+        grid: [snapped.gridX, snapped.gridY],
         zoom: map.getZoom(),
         auth: isAuthenticated,
         canPlace: canPlacePixel
@@ -384,46 +506,7 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
         pixelLayerRef.current = null;
       }
     };
-  }, []); // Seulement au montage initial
-
-  // Gérer les événements de la carte séparément
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
-    const handleZoomMove = () => {
-      const currentZoom = map.getZoom();
-      setZoom(currentZoom);
-
-      // Déclencher la mise à jour des pixels avec un petit délai
-      setTimeout(() => {
-        updatePixelLayer();
-      }, 50);
-    };
-
-    const handleClick = (e: L.LeafletMouseEvent) => {
-      console.log('🖱️ Clic carte:', {
-        coords: [e.latlng.lat, e.latlng.lng],
-        zoom: map.getZoom(),
-        auth: isAuthenticated,
-        canPlace: canPlacePixel
-      });
-
-      if (isAuthenticated && canPlacePixel && map.getZoom() >= GRID_CONFIG.MIN_ZOOM_VISIBLE) {
-        placePixel(e.latlng.lat, e.latlng.lng);
-      }
-    };
-
-    // Ajouter les événements
-    map.on('zoomend moveend', handleZoomMove);
-    map.on('click', handleClick);
-
-    return () => {
-      // Nettoyer les événements
-      map.off('zoomend moveend', handleZoomMove);
-      map.off('click', handleClick);
-    };
-  }, [isAuthenticated, canPlacePixel, placePixel, updatePixelLayer]);
+  }, []);
 
   // Preview du pixel au survol
   useEffect(() => {
@@ -432,27 +515,38 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
     const map = mapInstanceRef.current;
     const existing = pixels.find(p => p.gridX === previewPixel.gridX && p.gridY === previewPixel.gridY);
 
-    if (existing) return; // Ne pas afficher de preview sur un pixel existant
+    if (existing) return;
 
     const pixelSize = GRID_CONFIG.PIXEL_SIZE_DEGREES;
+
+    // Preview carré visuellement (correction Mercator)
+    const latCorrectionFactor = Math.cos(previewPixel.lat * Math.PI / 180);
+    const lngSize = pixelSize / latCorrectionFactor;
+    const latSize = pixelSize;
+
     const bounds = L.latLngBounds([
-      [previewPixel.lat - pixelSize / 2, previewPixel.lng - pixelSize / 2],
-      [previewPixel.lat + pixelSize / 2, previewPixel.lng + pixelSize / 2]
+      [previewPixel.lat - latSize / 2, previewPixel.lng - lngSize / 2],
+      [previewPixel.lat + latSize / 2, previewPixel.lng + lngSize / 2]
     ]);
 
     const previewRect = L.rectangle(bounds, {
       color: selectedColor,
       fillColor: selectedColor,
-      fillOpacity: 0.7,
+      fillOpacity: 0.6,
       weight: 2,
-      opacity: 0.9,
-      dashArray: '5, 5'
+      opacity: 0.8,
+      dashArray: '3, 3',
+      interactive: false
     });
 
     previewRect.addTo(map);
 
     return () => {
-      map.removeLayer(previewRect);
+      try {
+        map.removeLayer(previewRect);
+      } catch (e) {
+        // Ignore les erreurs
+      }
     };
   }, [previewPixel, selectedColor, pixels, isAuthenticated]);
 
@@ -460,7 +554,7 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
   const handleLogin = () => {
     const username = prompt('Nom d\'utilisateur:');
     if (username) {
-      login(username, 'demo'); // Mot de passe demo pour l'instant
+      login(username, 'demo');
     }
   };
 
@@ -595,23 +689,33 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, i
                 {colors.map((color) => (
                   <button
                     key={color}
-                    onClick={() => setSelectedColor(color)}
+                    onClick={() => {
+                      console.log('🎨 Clic couleur:', color);
+                      setSelectedColor(color);
+                    }}
                     style={{
                       width: '24px',
                       height: '24px',
                       backgroundColor: color,
-                      border: selectedColor === color ? '2px solid #60a5fa' : '1px solid #444',
+                      border: selectedColor === color ? '3px solid #60a5fa' : '1px solid #444',
                       borderRadius: '4px',
                       cursor: 'pointer',
-                      boxShadow: selectedColor === color ? '0 0 8px rgba(96, 165, 250, 0.5)' : 'none'
+                      boxShadow: selectedColor === color ? '0 0 8px rgba(96, 165, 250, 0.5)' : 'none',
+                      transition: 'all 0.2s'
                     }}
-                    title={color}
+                    title={`Couleur: ${color}`}
                   />
                 ))}
               </div>
 
               <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                Sélectionné: <span style={{ color: selectedColor, fontWeight: 'bold' }}>{selectedColor}</span>
+                Sélectionné: <span style={{
+                  color: selectedColor,
+                  fontWeight: 'bold',
+                  textShadow: selectedColor === '#222222' || selectedColor === '#888888' ? '0 0 2px white' : 'none'
+                }}>
+                  {selectedColor}
+                </span>
               </div>
             </div>
           )}

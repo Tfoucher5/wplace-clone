@@ -6,13 +6,13 @@
  */
 export const GRID_CONFIG = {
   // Taille d'un pixel en degrés (plus petit = plus de pixels, plus de détail)
-  PIXEL_SIZE_DEGREES: 0.001, // ~111 mètres à l'équateur, ~78 mètres à Paris
+  PIXEL_SIZE_DEGREES: 0.0002, // Encore plus petit pour des pixels fins
 
   // Zoom minimum pour voir les pixels (performance)
-  MIN_ZOOM_VISIBLE: 12,
+  MIN_ZOOM_VISIBLE: 16, // Zoom plus élevé pour des pixels très petits
 
   // Taille des pixels affichés en pixels écran
-  PIXEL_DISPLAY_SIZE: 8, // 8x8 pixels carrés sur l'écran
+  PIXEL_DISPLAY_SIZE: 3, // Très petits pixels
 
   // Limites du monde (projection Web Mercator)
   BOUNDS: {
@@ -24,7 +24,7 @@ export const GRID_CONFIG = {
 
   // Configuration des chunks pour optimiser le chargement
   CHUNK_SIZE: 100, // 100x100 pixels par chunk
-  MAX_PIXELS_PER_REQUEST: 10000, // Limite de pixels par requête API
+  MAX_PIXELS_PER_REQUEST: 3000, // Réduit encore pour de meilleures performances
 };
 
 /**
@@ -40,10 +40,10 @@ export function geoToGrid(lat: number, lng: number): { x: number; y: number } {
   const normalizedLat = Math.max(BOUNDS.MIN_LAT, Math.min(BOUNDS.MAX_LAT, lat));
   const normalizedLng = Math.max(BOUNDS.MIN_LNG, Math.min(BOUNDS.MAX_LNG, lng));
 
-  // Convertir en position de grille (entiers)
-  // X augmente vers l'est, Y augmente vers le sud (comme une image)
-  const x = Math.floor((normalizedLng - BOUNDS.MIN_LNG) / PIXEL_SIZE_DEGREES);
-  const y = Math.floor((BOUNDS.MAX_LAT - normalizedLat) / PIXEL_SIZE_DEGREES);
+  // Convertir en position de grille (entiers) - CORRECTION ICI
+  // On utilise Math.round au lieu de Math.floor pour un alignement correct
+  const x = Math.round((normalizedLng - BOUNDS.MIN_LNG) / PIXEL_SIZE_DEGREES);
+  const y = Math.round((BOUNDS.MAX_LAT - normalizedLat) / PIXEL_SIZE_DEGREES);
 
   return { x, y };
 }
@@ -57,9 +57,10 @@ export function geoToGrid(lat: number, lng: number): { x: number; y: number } {
 export function gridToGeo(gridX: number, gridY: number): { lat: number; lng: number } {
   const { BOUNDS, PIXEL_SIZE_DEGREES } = GRID_CONFIG;
 
-  // Calculer les coordonnées du centre du pixel
-  const lng = BOUNDS.MIN_LNG + (gridX * PIXEL_SIZE_DEGREES) + (PIXEL_SIZE_DEGREES / 2);
-  const lat = BOUNDS.MAX_LAT - (gridY * PIXEL_SIZE_DEGREES) - (PIXEL_SIZE_DEGREES / 2);
+  // Calculer les coordonnées du centre du pixel - CORRECTION ICI
+  // On assure que le centre correspond exactement à la grille
+  const lng = BOUNDS.MIN_LNG + (gridX * PIXEL_SIZE_DEGREES);
+  const lat = BOUNDS.MAX_LAT - (gridY * PIXEL_SIZE_DEGREES);
 
   return { lat, lng };
 }
@@ -78,9 +79,10 @@ export function getPixelBounds(gridX: number, gridY: number): {
 } {
   const { BOUNDS, PIXEL_SIZE_DEGREES } = GRID_CONFIG;
 
-  const west = BOUNDS.MIN_LNG + (gridX * PIXEL_SIZE_DEGREES);
+  // Calculer les limites en partant du coin du pixel - CORRECTION ICI
+  const west = BOUNDS.MIN_LNG + (gridX * PIXEL_SIZE_DEGREES) - (PIXEL_SIZE_DEGREES / 2);
   const east = west + PIXEL_SIZE_DEGREES;
-  const north = BOUNDS.MAX_LAT - (gridY * PIXEL_SIZE_DEGREES);
+  const north = BOUNDS.MAX_LAT - (gridY * PIXEL_SIZE_DEGREES) + (PIXEL_SIZE_DEGREES / 2);
   const south = north - PIXEL_SIZE_DEGREES;
 
   return { north, south, east, west };
@@ -104,7 +106,7 @@ export function getVisiblePixels(mapBounds: {
     return [];
   }
 
-  // Convertir les limites de la carte en positions de grille
+  // Convertir les limites de la carte en positions de grille avec alignement correct
   const topLeft = geoToGrid(mapBounds.north, mapBounds.west);
   const bottomRight = geoToGrid(mapBounds.south, mapBounds.east);
 
@@ -115,14 +117,14 @@ export function getVisiblePixels(mapBounds: {
   const pixelCountX = Math.min(bottomRight.x - topLeft.x + 1, maxPixelsPerSide);
   const pixelCountY = Math.min(bottomRight.y - topLeft.y + 1, maxPixelsPerSide);
 
-  // Générer toutes les positions de grille visibles
-  for (let x = topLeft.x; x < topLeft.x + pixelCountX; x++) {
-    for (let y = topLeft.y; y < topLeft.y + pixelCountY; y++) {
+  // Générer toutes les positions de grille visibles - alignement entier
+  for (let x = topLeft.x; x <= topLeft.x + pixelCountX - 1; x++) {
+    for (let y = topLeft.y; y <= topLeft.y + pixelCountY - 1; y++) {
       pixels.push({ x, y });
     }
   }
 
-  console.log(`🎯 Pixels visibles: ${pixels.length} (zone: ${pixelCountX}x${pixelCountY})`);
+  console.log(`🎯 Pixels visibles: ${pixels.length} (zone: ${pixelCountX}x${pixelCountY}) - Range X:[${topLeft.x}, ${topLeft.x + pixelCountX - 1}] Y:[${topLeft.y}, ${topLeft.y + pixelCountY - 1}]`);
   return pixels;
 }
 
