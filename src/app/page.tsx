@@ -12,10 +12,27 @@ const LeafletMapDynamic = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="h-full flex items-center justify-center bg-slate-900">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-white">Chargement de la carte...</p>
+      <div style={{
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#0f172a'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{
+            width: '32px',
+            height: '32px',
+            border: '2px solid #3b82f6',
+            borderTopColor: 'transparent',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+            margin: '0 auto 16px'
+          }}></div>
+          <p style={{ color: 'white', fontSize: '16px' }}>Chargement de la carte...</p>
+          <p style={{ color: '#94a3b8', fontSize: '12px' }}>
+            Initialisation des composants Leaflet
+          </p>
         </div>
       </div>
     )
@@ -30,14 +47,14 @@ function AppContent() {
   const { user, isAuthenticated } = useAuth();
 
   return (
-    <div className="h-full flex flex-col">
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <Header
         onAuthClick={() => setIsAuthModalOpen(true)}
         totalPixels={totalPixels}
         connectedUsers={connectedUsers}
       />
 
-      <main className="flex-1">
+      <main style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <LeafletMapDynamic
           userId={user?.id}
           isAuthenticated={isAuthenticated}
@@ -49,6 +66,54 @@ function AppContent() {
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
       />
+
+      {/* Styles globaux pour les animations */}
+      <style jsx global>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+
+        html, body {
+          margin: 0;
+          padding: 0;
+          height: 100%;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          background-color: #0f172a;
+        }
+
+        #__next {
+          height: 100%;
+        }
+
+        * {
+          box-sizing: border-box;
+        }
+
+        /* Leaflet custom styles */
+        .leaflet-container {
+          background-color: #1e293b !important;
+        }
+
+        .leaflet-control-zoom a {
+          background-color: #374151 !important;
+          color: white !important;
+          border-color: #4b5563 !important;
+        }
+
+        .leaflet-control-zoom a:hover {
+          background-color: #4b5563 !important;
+        }
+
+        .leaflet-popup-content-wrapper {
+          background-color: #1e293b !important;
+          color: white !important;
+        }
+
+        .leaflet-popup-tip {
+          background-color: #1e293b !important;
+        }
+      `}</style>
     </div>
   );
 }

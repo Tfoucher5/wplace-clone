@@ -71,7 +71,7 @@ const Header: React.FC<HeaderProps> = ({ onAuthClick, totalPixels = 0, connected
           flex: '1 1 auto',
           justifyContent: 'center'
         }}>
-          <div style={{ textAlign: 'center', display: window.innerWidth <= 768 ? 'none' : 'block' }}>
+          <div style={{ textAlign: 'center' }}>
             <div style={{ color: 'white', fontWeight: '600' }}>{totalPixels.toLocaleString()}</div>
             <div style={{ color: '#94a3b8', fontSize: '10px' }}>Pixels</div>
           </div>
@@ -79,15 +79,11 @@ const Header: React.FC<HeaderProps> = ({ onAuthClick, totalPixels = 0, connected
             <div style={{ color: 'white', fontWeight: '600' }}>{connectedUsers}</div>
             <div style={{ color: '#94a3b8', fontSize: '10px' }}>En ligne</div>
           </div>
-          <div style={{ textAlign: 'center', display: window.innerWidth <= 768 ? 'none' : 'block' }}>
-            <div style={{ color: 'white', fontWeight: '600' }}>∞</div>
-            <div style={{ color: '#94a3b8', fontSize: '10px' }}>Mondial</div>
-          </div>
         </div>
 
-        {/* Menu utilisateur - Compact */}
+        {/* Zone utilisateur */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '0 0 auto' }}>
-          {isAuthenticated && user ? (
+          {isAuthenticated ? (
             <div style={{ position: 'relative' }}>
               <button
                 onClick={() => setShowUserMenu(!showUserMenu)}
@@ -95,112 +91,64 @@ const Header: React.FC<HeaderProps> = ({ onAuthClick, totalPixels = 0, connected
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
-                  backgroundColor: '#475569',
                   padding: '6px 12px',
-                  borderRadius: '6px',
-                  border: 'none',
+                  backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                  border: '1px solid rgba(59, 130, 246, 0.3)',
+                  borderRadius: '8px',
+                  color: 'white',
                   cursor: 'pointer',
-                  transition: 'background-color 0.2s'
+                  fontSize: '14px',
+                  transition: 'all 0.2s'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#64748b'}
-                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#475569'}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.2)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.1)';
+                }}
               >
                 <div style={{
                   width: '24px',
                   height: '24px',
-                  background: 'linear-gradient(135deg, #10b981, #3b82f6)',
+                  backgroundColor: '#3b82f6',
                   borderRadius: '50%',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center'
+                  justifyContent: 'center',
+                  fontSize: '12px',
+                  fontWeight: 'bold'
                 }}>
-                  <span style={{ color: 'white', fontSize: '12px', fontWeight: 'bold' }}>
-                    {user.username.charAt(0).toUpperCase()}
-                  </span>
+                  {user?.username.charAt(0).toUpperCase()}
                 </div>
-                <span style={{
-                  color: 'white',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  display: window.innerWidth <= 768 ? 'none' : 'block'
-                }}>
-                  {user.username}
-                </span>
-                <svg width="12" height="12" fill="currentColor" style={{ color: '#94a3b8' }}>
-                  <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
+                <span>{user?.username}</span>
+                <span style={{ fontSize: '10px' }}>▼</span>
               </button>
 
               {/* Menu déroulant */}
               {showUserMenu && (
                 <div style={{
                   position: 'absolute',
-                  right: 0,
                   top: '100%',
+                  right: 0,
                   marginTop: '4px',
-                  width: '180px',
-                  backgroundColor: '#475569',
+                  backgroundColor: '#1e293b',
+                  border: '1px solid #475569',
                   borderRadius: '8px',
-                  boxShadow: '0 10px 25px rgba(0,0,0,0.25)',
-                  border: '1px solid #64748b',
-                  zIndex: 1001
+                  padding: '8px',
+                  minWidth: '200px',
+                  boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)',
+                  zIndex: 1100
                 }}>
                   <div style={{
-                    padding: '12px',
-                    borderBottom: '1px solid #64748b'
+                    padding: '8px 12px',
+                    fontSize: '12px',
+                    color: '#94a3b8',
+                    borderBottom: '1px solid #475569',
+                    marginBottom: '8px'
                   }}>
-                    <p style={{ fontSize: '14px', fontWeight: '600', color: 'white', margin: 0 }}>{user.username}</p>
-                    <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>{user.email}</p>
+                    <div style={{ color: 'white', fontWeight: '600' }}>{user?.email}</div>
+                    <div>Pixels placés: {user?.pixelsPlaced || 0}</div>
                   </div>
-
-                  <button
-                    onClick={() => {
-                      // Ouvrir modal de profil
-                      alert(`👤 Profil de ${user.username}\n\n📧 Email: ${user.email}\n🆔 ID: ${user.id}\n🎨 Pixels placés: Voir statistiques`);
-                      setShowUserMenu(false);
-                    }}
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '10px 12px',
-                      fontSize: '14px',
-                      color: '#e2e8f0',
-                      backgroundColor: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#64748b'}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                  >
-                    👤 Mon profil
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      // Ouvrir modal des statistiques
-                      const pixels = localStorage.getItem('wplace_pixels');
-                      const userPixels = pixels ? JSON.parse(pixels).filter((p: any) => p.username === user.username) : [];
-
-                      alert(`📊 Statistiques de ${user.username}\n\n🎯 Pixels placés: ${userPixels.length}\n🕒 Dernier pixel: ${userPixels.length > 0 ? new Date(userPixels[userPixels.length - 1].placedAt).toLocaleString() : 'Aucun'}\n🌍 Couverture: Monde entier\n🏆 Rang: Artiste actif`);
-                      setShowUserMenu(false);
-                    }}
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '10px 12px',
-                      fontSize: '14px',
-                      color: '#e2e8f0',
-                      backgroundColor: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#64748b'}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                  >
-                    📊 Mes statistiques
-                  </button>
-
-                  <div style={{ height: '1px', backgroundColor: '#64748b', margin: '4px 0' }}></div>
 
                   <button
                     onClick={() => {
@@ -209,16 +157,22 @@ const Header: React.FC<HeaderProps> = ({ onAuthClick, totalPixels = 0, connected
                     }}
                     style={{
                       width: '100%',
-                      textAlign: 'left',
-                      padding: '10px 12px',
-                      fontSize: '14px',
-                      color: '#f87171',
+                      padding: '8px 12px',
                       backgroundColor: 'transparent',
                       border: 'none',
-                      cursor: 'pointer'
+                      color: '#ef4444',
+                      fontSize: '14px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                      transition: 'background-color 0.2s'
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#64748b'}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
                   >
                     🚪 Se déconnecter
                   </button>
@@ -229,50 +183,46 @@ const Header: React.FC<HeaderProps> = ({ onAuthClick, totalPixels = 0, connected
             <button
               onClick={onAuthClick}
               style={{
+                padding: '8px 16px',
                 backgroundColor: '#3b82f6',
                 color: 'white',
                 border: 'none',
-                padding: '8px 16px',
-                borderRadius: '6px',
+                borderRadius: '8px',
                 fontSize: '14px',
-                fontWeight: '500',
+                fontWeight: '600',
                 cursor: 'pointer',
-                transition: 'background-color 0.2s'
+                transition: 'background-color 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
               }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#2563eb'}
-              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#3b82f6'}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#2563eb';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = '#3b82f6';
+              }}
             >
-              Se connecter
+              🔐 Connexion
             </button>
           )}
-
-          {/* Bouton d'aide - Compact */}
-          <button
-            onClick={() => {
-              alert('🎮 Comment jouer:\n\n1. 🎨 Sélectionnez une couleur\n2. 🖱️ Cliquez sur la carte\n3. ⏱️ Attendez 30 secondes\n4. 🎯 Recommencez !');
-            }}
-            style={{
-              width: '32px',
-              height: '32px',
-              backgroundColor: '#475569',
-              border: 'none',
-              borderRadius: '6px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'background-color 0.2s'
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#64748b'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#475569'}
-            title="Aide"
-          >
-            <svg width="16" height="16" fill="currentColor" style={{ color: '#94a3b8' }}>
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-            </svg>
-          </button>
         </div>
       </div>
+
+      {/* Fermer le menu si on clique ailleurs */}
+      {showUserMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 1000
+          }}
+          onClick={() => setShowUserMenu(false)}
+        />
+      )}
     </header>
   );
 };

@@ -1,8 +1,18 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { useAuth } from '@/hooks/useAuth';
+import {
+  geoToGrid,
+  gridToGeo,
+  snapToGrid,
+  getVisiblePixels,
+  getPixelScreenSize,
+  canPlacePixelAt,
+  GRID_CONFIG
+} from '@/lib/gridSystem';
 
 // Fix pour les icônes Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -13,39 +23,97 @@ L.Icon.Default.mergeOptions({
 });
 
 interface LeafletMapProps {
-  userId?: number;
-  isAuthenticated: boolean;
   onPixelPlaced?: (count: number) => void;
+  userId?: number;
+  isAuthenticated?: boolean;
 }
 
 interface Pixel {
   id: number;
   lat: number;
   lng: number;
+  gridX: number;
+  gridY: number;
   color: string;
   username: string;
   placedAt: Date;
 }
 
-const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ userId, isAuthenticated, onPixelPlaced }) => {
+interface PixelLayer extends L.LayerGroup {
+  _pixels: Map<string, L.Rectangle>;
+}
+
+const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ onPixelPlaced, userId, isAuthenticated: authProp }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const pixelLayerRef = useRef<PixelLayer | null>(null);
+
   const [pixels, setPixels] = useState<Pixel[]>([]);
   const [selectedColor, setSelectedColor] = useState<string>('#FF0000');
   const [zoom, setZoom] = useState<number>(3);
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
   const [canPlacePixel, setCanPlacePixel] = useState<boolean>(true);
   const [showPanels, setShowPanels] = useState<boolean>(true);
+  const [previewPixel, setPreviewPixel] = useState<{ lat: number; lng: number; gridX: number; gridY: number } | null>(null);
+  const [wsConnected, setWsConnected] = useState<boolean>(false);
 
-  // Couleurs disponibles
+  const { user, isAuthenticated, login, logout } = useAuth();
+
+  // Couleurs disponibles (palette r/place)
   const colors = [
-    '#FF0000', '#00FF00', '#0000FF', '#FFFF00',
-    '#FF00FF', '#00FFFF', '#FFA500', '#800080',
-    '#FFC0CB', '#A52A2A', '#808080', '#000000',
-    '#FFFFFF', '#90EE90', '#FFB6C1', '#20B2AA'
+    '#FFFFFF', '#E4E4E4', '#888888', '#222222',
+    '#FFA7D1', '#E50000', '#E59500', '#A06A42',
+    '#E5D900', '#94E044', '#02BE01', '#00D3DD',
+    '#0083C7', '#0000EA', '#CF6EE4', '#820080'
   ];
 
-  // Charger les pixels sauvegardés
+  // Simulation WebSocket simplifié
+  useEffect(() => {
+    if (isAuthenticated) {
+      console.log('🔌 WebSocket simulé connecté');
+      setWsConnected(true);
+    } else {
+      setWsConnected(false);
+    }
+  }, [isAuthenticated]);
+
+  // Gestion du cooldown basée sur les données utilisateur
+  useEffect(() => {
+    if (!isAuthenticated || !user?.lastPixelTime) {
+      setCooldownRemaining(0);
+      setCanPlacePixel(true);
+      return;
+    }
+
+    const cooldownDuration = 30 * 1000; // 30 secondes
+    const lastPixelTime = new Date(user.lastPixelTime).getTime();
+    const now = Date.now();
+    const timeRemaining = Math.max(0, cooldownDuration - (now - lastPixelTime));
+
+    if (timeRemaining > 0) {
+      setCooldownRemaining(Math.ceil(timeRemaining / 1000));
+      setCanPlacePixel(false);
+
+      const interval = setInterval(() => {
+        const newTimeRemaining = Math.max(0, cooldownDuration - (Date.now() - lastPixelTime));
+        const secondsRemaining = Math.ceil(newTimeRemaining / 1000);
+
+        setCooldownRemaining(secondsRemaining);
+
+        if (secondsRemaining === 0) {
+          setCanPlacePixel(true);
+          clearInterval(interval);
+        }
+      }, 1000);
+
+      return () => clearInterval(interval);
+    } else {
+      setCooldownRemaining(0);
+      setCanPlacePixel(true);
+    }
+  }, [isAuthenticated, user?.lastPixelTime]);
+
+  // Charger les pixels depuis localStorage au démarrage
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedPixels = localStorage.getItem('wplace_pixels');
@@ -63,478 +131,539 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ userId, isAuthenticated,
     }
   }, []);
 
-  // Sauvegarder les pixels
+  // Sauvegarder les pixels dans localStorage
   useEffect(() => {
     if (typeof window !== 'undefined' && pixels.length >= 0) {
       localStorage.setItem('wplace_pixels', JSON.stringify(pixels));
     }
   }, [pixels]);
 
+  // Placer un pixel
+  const placePixel = useCallback(async (lat: number, lng: number) => {
+    if (!isAuthenticated || !canPlacePixel) {
+      console.log('❌ Cannot place pixel:', { isAuthenticated, canPlacePixel });
+      return;
+    }
+
+    // Snap à la grille
+    const snapped = snapToGrid(lat, lng);
+
+    // Vérifier si un pixel existe déjà à cette position
+    const existingPixel = pixels.find(p => p.gridX === snapped.gridX && p.gridY === snapped.gridY);
+
+    if (existingPixel) {
+      console.log('⚠️ Pixel déjà existant à cette position - remplacement');
+    }
+
+    const newPixel: Pixel = {
+      id: Date.now(), // ID temporaire
+      lat: snapped.lat,
+      lng: snapped.lng,
+      gridX: snapped.gridX,
+      gridY: snapped.gridY,
+      color: selectedColor,
+      username: user?.username || 'Anonyme',
+      placedAt: new Date()
+    };
+
+    try {
+      // Optimistic update - ajouter immédiatement à l'état local
+      setPixels(prev => {
+        const filtered = prev.filter(p => !(p.gridX === newPixel.gridX && p.gridY === newPixel.gridY));
+        return [...filtered, newPixel];
+      });
+
+      // Simuler l'API pour la démo (en mode production, remplacer par un vrai appel API)
+      const simulateApiCall = () => {
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            resolve({
+              success: true,
+              data: {
+                pixel: newPixel,
+                user: {
+                  ...user,
+                  pixelsPlaced: (user?.pixelsPlaced || 0) + 1,
+                  lastPixelTime: newPixel.placedAt.toISOString()
+                }
+              }
+            });
+          }, 100);
+        });
+      };
+
+      const result: any = await simulateApiCall();
+
+      // Callback pour les stats
+      if (onPixelPlaced) {
+        onPixelPlaced(result.data.user.pixelsPlaced);
+      }
+
+      console.log('✅ Pixel placé (simulé):', result);
+
+    } catch (error) {
+      console.error('❌ Erreur placement pixel:', error);
+
+      // Rollback en cas d'erreur
+      setPixels(prev => prev.filter(p => !(p.gridX === newPixel.gridX && p.gridY === newPixel.gridY)));
+
+      alert('Erreur lors du placement du pixel. Veuillez réessayer.');
+    }
+  }, [isAuthenticated, canPlacePixel, selectedColor, pixels, user, onPixelPlaced]);
+
+  // Créer et mettre à jour la couche de pixels
+  const updatePixelLayer = useCallback(() => {
+    if (!mapInstanceRef.current) return;
+
+    const map = mapInstanceRef.current;
+    const currentZoom = map.getZoom();
+
+    // Ne pas afficher les pixels si le zoom est trop faible
+    if (currentZoom < GRID_CONFIG.MIN_ZOOM_VISIBLE) {
+      if (pixelLayerRef.current) {
+        map.removeLayer(pixelLayerRef.current);
+        pixelLayerRef.current = null;
+      }
+      return;
+    }
+
+    // Créer la couche de pixels si elle n'existe pas
+    if (!pixelLayerRef.current) {
+      const layer = L.layerGroup();
+      // Extension de l'objet avec nos propriétés personnalisées
+      const pixelLayer = Object.assign(layer, {
+        _pixels: new Map<string, L.Rectangle>()
+      }) as PixelLayer;
+
+      pixelLayerRef.current = pixelLayer;
+      map.addLayer(pixelLayer);
+    }
+
+    const pixelLayer = pixelLayerRef.current;
+    const bounds = map.getBounds();
+
+    // Obtenir les pixels visibles dans la zone actuelle
+    const visiblePixels = getVisiblePixels({
+      north: bounds.getNorth(),
+      south: bounds.getSouth(),
+      east: bounds.getEast(),
+      west: bounds.getWest()
+    }, currentZoom);
+
+    // Nettoyer les pixels qui ne sont plus visibles
+    pixelLayer._pixels.forEach((rectangle, key) => {
+      const [gridX, gridY] = key.split(',').map(Number);
+      const isVisible = visiblePixels.some(p => p.x === gridX && p.y === gridY);
+
+      if (!isVisible) {
+        pixelLayer.removeLayer(rectangle);
+        pixelLayer._pixels.delete(key);
+      }
+    });
+
+    // Ajouter les pixels visibles
+    visiblePixels.forEach(({ x: gridX, y: gridY }) => {
+      const key = `${gridX},${gridY}`;
+
+      if (!pixelLayer._pixels.has(key)) {
+        const pixel = pixels.find(p => p.gridX === gridX && p.gridY === gridY);
+        const geo = gridToGeo(gridX, gridY);
+        const pixelSize = GRID_CONFIG.PIXEL_SIZE_DEGREES;
+
+        const rectBounds = L.latLngBounds([
+          [geo.lat - pixelSize / 2, geo.lng - pixelSize / 2],
+          [geo.lat + pixelSize / 2, geo.lng + pixelSize / 2]
+        ]);
+
+        const color = pixel ? pixel.color : 'rgba(255,255,255,0.1)';
+        const opacity = pixel ? 1 : 0.2;
+
+        const rectangle = L.rectangle(rectBounds, {
+          color: pixel ? color : '#ccc',
+          fillColor: color,
+          fillOpacity: opacity,
+          weight: 1,
+          opacity: opacity
+        });
+
+        // Tooltip avec infos du pixel
+        if (pixel) {
+          rectangle.bindTooltip(`
+            <strong>Pixel (${gridX}, ${gridY})</strong><br/>
+            Par: ${pixel.username}<br/>
+            Couleur: ${pixel.color}<br/>
+            Placé: ${pixel.placedAt.toLocaleString()}
+          `, {
+            permanent: false,
+            direction: 'top'
+          });
+        }
+
+        pixelLayer.addLayer(rectangle);
+        pixelLayer._pixels.set(key, rectangle);
+      }
+    });
+
+  }, [pixels]); // Seulement dépendre des pixels, pas du zoom
+
+  // Mettre à jour les pixels quand ils changent ou que la vue change
+  useEffect(() => {
+    updatePixelLayer();
+  }, [pixels, zoom]); // Appeler updatePixelLayer quand le zoom ou les pixels changent
+
   // Initialiser la carte
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
-    // Supprimer la carte existante si elle existe
+    // Supprimer la carte existante
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove();
       mapInstanceRef.current = null;
+      pixelLayerRef.current = null;
     }
 
     console.log('🗺️ Initialisation de la carte...');
 
-    try {
-      // Créer la carte avec limites strictes
-      const map = L.map(mapContainerRef.current, {
-        center: [20, 0], // Centre du monde
-        zoom: 3,
-        zoomControl: true,
-        attributionControl: false,
-        worldCopyJump: true, // Réplication horizontale
-        minZoom: 2,
-        maxZoom: 18,
-        preferCanvas: true, // Meilleure performance
-        // Limites strictes - Pôles Nord/Sud, longitude infinie
-        maxBounds: [[-85, -Infinity], [85, Infinity]],
-        maxBoundsViscosity: 1.0 // Résistance maximale
-      });
+    // Créer la carte
+    const map = L.map(mapContainerRef.current, {
+      center: [20, 0],
+      zoom: 3,
+      zoomControl: true,
+      attributionControl: false,
+      worldCopyJump: true,
+      minZoom: 2,
+      maxZoom: 18,
+      preferCanvas: true,
+      maxBounds: [[-85, -Infinity], [85, Infinity]],
+      maxBoundsViscosity: 1.0
+    });
 
-      // Ajouter les tuiles avec réplication horizontale
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-        noWrap: false, // Permet la réplication horizontale
-        maxZoom: 18
-      }).addTo(map);
-
-      // Gestion du zoom avec mise à jour état
-      map.on('zoomend', () => {
-        const currentZoom = map.getZoom();
-        setZoom(currentZoom);
-        console.log('📏 Zoom changé:', currentZoom);
-      });
-
-      // Gestion des clics avec debug
-      map.on('click', (e: L.LeafletMouseEvent) => {
-        console.log('🖱️ Clic détecté:', {
-          lat: e.latlng.lat,
-          lng: e.latlng.lng,
-          isAuthenticated,
-          canPlacePixel,
-          zoom: map.getZoom()
-        });
-
-        if (isAuthenticated && canPlacePixel) {
-          placePixel(e.latlng.lat, e.latlng.lng);
-        } else {
-          if (!isAuthenticated) {
-            console.log('❌ Non authentifié');
-            alert('Connectez-vous pour placer des pixels !');
-          } else if (!canPlacePixel) {
-            console.log('⏱️ Cooldown actif');
-            alert(`Attendez encore ${Math.ceil(cooldownRemaining / 1000)} secondes`);
-          }
-        }
-      });
-
-      // Restaurer les pixels existants
-      pixels.forEach(pixel => {
-        addPixelToMap(map, pixel);
-      });
-
-      mapInstanceRef.current = map;
-
-      // Forcer le redimensionnement
-      setTimeout(() => {
-        map.invalidateSize();
-      }, 100);
-
-      console.log('✅ Carte initialisée avec', pixels.length, 'pixels');
-
-    } catch (error) {
-      console.error('❌ Erreur initialisation carte:', error);
-    }
-
-    // Cleanup
-    return () => {
-      if (mapInstanceRef.current) {
-        console.log('🧹 Nettoyage carte');
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
-    };
-  }, []); // Une seule fois
-
-  // Redimensionner quand le container change
-  useEffect(() => {
-    const handleResize = () => {
-      if (mapInstanceRef.current) {
-        setTimeout(() => {
-          mapInstanceRef.current?.invalidateSize();
-        }, 100);
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // Ajouter un pixel à la carte
-  const addPixelToMap = (map: L.Map, pixel: Pixel) => {
-    const marker = L.circleMarker([pixel.lat, pixel.lng], {
-      color: pixel.color,
-      fillColor: pixel.color,
-      fillOpacity: 0.8,
-      radius: 5,
-      weight: 2,
-      stroke: true
+    // Tuiles de base
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      noWrap: false,
+      maxZoom: 18,
+      opacity: 0.7
     }).addTo(map);
 
-    marker.bindTooltip(`
-      <div style="text-align: center;">
-        <strong style="color: ${pixel.color};">${pixel.color}</strong><br/>
-        Par: <strong>${pixel.username}</strong><br/>
-        <small>${pixel.placedAt.toLocaleString()}</small>
-      </div>
-    `, {
-      direction: 'top',
-      offset: [0, -10]
+    mapInstanceRef.current = map;
+
+    // Événements
+    map.on('zoomend moveend', () => {
+      const currentZoom = map.getZoom();
+      setZoom(currentZoom);
+      // Ne pas appeler updatePixelLayer ici pour éviter les boucles
     });
 
-    return marker;
-  };
+    map.on('mousemove', (e: L.LeafletMouseEvent) => {
+      if (map.getZoom() >= GRID_CONFIG.MIN_ZOOM_VISIBLE) {
+        const snapped = snapToGrid(e.latlng.lat, e.latlng.lng);
+        setPreviewPixel(snapped);
+      } else {
+        setPreviewPixel(null);
+      }
+    });
 
-  // Placer un pixel
-  const placePixel = (lat: number, lng: number) => {
-    if (!isAuthenticated || !canPlacePixel || !userId || !mapInstanceRef.current) {
-      return;
-    }
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      console.log('🖱️ Clic carte:', {
+        coords: [e.latlng.lat, e.latlng.lng],
+        zoom: map.getZoom(),
+        auth: isAuthenticated,
+        canPlace: canPlacePixel
+      });
 
-    // Récupérer le nom d'utilisateur
-    const currentUserData = localStorage.getItem('wplace_current_user');
-    const username = currentUserData ? JSON.parse(currentUserData).user.username : 'Anonyme';
+      if (isAuthenticated && canPlacePixel && map.getZoom() >= GRID_CONFIG.MIN_ZOOM_VISIBLE) {
+        placePixel(e.latlng.lat, e.latlng.lng);
+      }
+    });
 
-    console.log(`🎨 Pixel placé par ${username} à: ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+        pixelLayerRef.current = null;
+      }
+    };
+  }, []); // Seulement au montage initial
 
-    const newPixel: Pixel = {
-      id: Date.now(),
-      lat: parseFloat(lat.toFixed(6)), // Limiter la précision
-      lng: parseFloat(lng.toFixed(6)),
-      color: selectedColor,
-      username,
-      placedAt: new Date()
+  // Gérer les événements de la carte séparément
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const handleZoomMove = () => {
+      const currentZoom = map.getZoom();
+      setZoom(currentZoom);
+
+      // Déclencher la mise à jour des pixels avec un petit délai
+      setTimeout(() => {
+        updatePixelLayer();
+      }, 50);
     };
 
-    // Ajouter à la liste
-    setPixels(prev => {
-      const newPixels = [...prev, newPixel];
-      onPixelPlaced?.(newPixels.length);
-      return newPixels;
+    const handleClick = (e: L.LeafletMouseEvent) => {
+      console.log('🖱️ Clic carte:', {
+        coords: [e.latlng.lat, e.latlng.lng],
+        zoom: map.getZoom(),
+        auth: isAuthenticated,
+        canPlace: canPlacePixel
+      });
+
+      if (isAuthenticated && canPlacePixel && map.getZoom() >= GRID_CONFIG.MIN_ZOOM_VISIBLE) {
+        placePixel(e.latlng.lat, e.latlng.lng);
+      }
+    };
+
+    // Ajouter les événements
+    map.on('zoomend moveend', handleZoomMove);
+    map.on('click', handleClick);
+
+    return () => {
+      // Nettoyer les événements
+      map.off('zoomend moveend', handleZoomMove);
+      map.off('click', handleClick);
+    };
+  }, [isAuthenticated, canPlacePixel, placePixel, updatePixelLayer]);
+
+  // Preview du pixel au survol
+  useEffect(() => {
+    if (!mapInstanceRef.current || !previewPixel || !isAuthenticated) return;
+
+    const map = mapInstanceRef.current;
+    const existing = pixels.find(p => p.gridX === previewPixel.gridX && p.gridY === previewPixel.gridY);
+
+    if (existing) return; // Ne pas afficher de preview sur un pixel existant
+
+    const pixelSize = GRID_CONFIG.PIXEL_SIZE_DEGREES;
+    const bounds = L.latLngBounds([
+      [previewPixel.lat - pixelSize / 2, previewPixel.lng - pixelSize / 2],
+      [previewPixel.lat + pixelSize / 2, previewPixel.lng + pixelSize / 2]
+    ]);
+
+    const previewRect = L.rectangle(bounds, {
+      color: selectedColor,
+      fillColor: selectedColor,
+      fillOpacity: 0.7,
+      weight: 2,
+      opacity: 0.9,
+      dashArray: '5, 5'
     });
 
-    // Ajouter à la carte avec animation
-    const marker = addPixelToMap(mapInstanceRef.current, newPixel);
+    previewRect.addTo(map);
 
-    // Animation du nouveau pixel
-    setTimeout(() => {
-      marker.setStyle({ radius: 8 });
-      setTimeout(() => marker.setStyle({ radius: 5 }), 300);
-    }, 50);
+    return () => {
+      map.removeLayer(previewRect);
+    };
+  }, [previewPixel, selectedColor, pixels, isAuthenticated]);
 
-    // Démarrer le cooldown
-    setCanPlacePixel(false);
-    setCooldownRemaining(30000);
+  // Authentification simple
+  const handleLogin = () => {
+    const username = prompt('Nom d\'utilisateur:');
+    if (username) {
+      login(username, 'demo'); // Mot de passe demo pour l'instant
+    }
   };
 
-  // Effet cooldown
-  useEffect(() => {
-    if (cooldownRemaining > 0) {
-      const timer = setInterval(() => {
-        setCooldownRemaining(prev => {
-          const newTime = prev - 1000;
-          if (newTime <= 0) {
-            setCanPlacePixel(true);
-            return 0;
-          }
-          return newTime;
-        });
-      }, 1000);
-      return () => clearInterval(timer);
-    }
-  }, [cooldownRemaining]);
-
   return (
-    <div style={{
-      position: 'absolute',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      width: '100%',
-      height: '100%',
-      overflow: 'hidden'
-    }}>
-      {/* Container de la carte - FULL SIZE */}
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* Conteneur carte */}
       <div
         ref={mapContainerRef}
         style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
           width: '100%',
           height: '100%',
+          cursor: isAuthenticated && canPlacePixel && zoom >= GRID_CONFIG.MIN_ZOOM_VISIBLE ? 'crosshair' : 'default'
         }}
       />
 
-      {/* Bouton masquer/afficher - Position ajustée pour ne pas chevaucher le header */}
+      {/* Toggle panneaux */}
       <button
         onClick={() => setShowPanels(!showPanels)}
         style={{
           position: 'absolute',
-          top: '70px', // Décalé sous le header (header ~60px + marge)
-          right: '12px',
+          top: '10px',
+          right: '10px',
           zIndex: 1000,
+          padding: '8px 12px',
           backgroundColor: 'rgba(0,0,0,0.8)',
           color: 'white',
           border: 'none',
-          borderRadius: '8px',
-          padding: '10px 14px',
+          borderRadius: '6px',
           cursor: 'pointer',
-          fontSize: '13px',
-          fontWeight: 'bold',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.3)'
+          fontSize: '12px'
         }}
       >
-        {showPanels ? '✕' : '⚙️'}
+        {showPanels ? '👁️ Masquer UI' : '⚙️ Afficher UI'}
       </button>
 
-      {/* Interface utilisateur - Position ajustée */}
       {showPanels && (
-        <div style={{
-          position: 'absolute',
-          top: '70px', // Décalé sous le header
-          left: '12px',
-          zIndex: 1000,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '10px',
-          maxHeight: 'calc(100% - 82px)', // Ajuster pour le décalage
-          overflowY: 'auto',
-          maxWidth: '280px'
-        }}>
-
-          {/* Sélecteur de couleur */}
+        <>
+          {/* Panneau d'authentification */}
           <div style={{
+            position: 'absolute',
+            top: '60px',
+            right: '10px',
+            zIndex: 1000,
             backgroundColor: 'rgba(0,0,0,0.9)',
-            padding: '14px',
+            padding: '16px',
             borderRadius: '10px',
             color: 'white',
+            fontSize: '14px',
+            minWidth: '200px',
             border: '1px solid rgba(255,255,255,0.2)',
             boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
           }}>
-            <h3 style={{
-              margin: '0 0 10px 0',
-              fontSize: '14px',
-              fontWeight: 'bold',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
-            }}>
-              🎨 Couleur
-              <div style={{
-                width: '18px',
-                height: '18px',
-                backgroundColor: selectedColor,
-                border: '2px solid white',
-                borderRadius: '4px'
-              }}></div>
-            </h3>
+            <div style={{ fontWeight: 'bold', marginBottom: '12px', color: '#60a5fa' }}>
+              🔐 Authentification
+            </div>
 
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: '6px',
-              marginBottom: '10px'
-            }}>
-              {colors.map(color => (
+            {isAuthenticated ? (
+              <div>
+                <div style={{ color: '#10b981', marginBottom: '8px' }}>
+                  ✅ Connecté: <strong>{user?.username}</strong>
+                </div>
+                <div style={{ fontSize: '12px', marginBottom: '8px', color: '#94a3b8' }}>
+                  Pixels placés: {user?.pixelsPlaced || 0}
+                </div>
+                <div style={{ fontSize: '12px', marginBottom: '12px', color: '#94a3b8' }}>
+                  WebSocket: {wsConnected ? '🟢 Connecté' : '🔴 Déconnecté'}
+                </div>
                 <button
-                  key={color}
-                  onClick={() => setSelectedColor(color)}
+                  onClick={() => logout()}
                   style={{
-                    width: '32px',
-                    height: '32px',
-                    backgroundColor: color,
-                    border: selectedColor === color ? '3px solid #3b82f6' : '2px solid rgba(255,255,255,0.3)',
+                    width: '100%',
+                    padding: '8px',
+                    backgroundColor: '#ef4444',
+                    color: 'white',
+                    border: 'none',
                     borderRadius: '6px',
                     cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    transform: selectedColor === color ? 'scale(1.1)' : 'scale(1)'
+                    fontSize: '12px'
                   }}
-                  title={color}
-                />
-              ))}
-            </div>
-
-            <div style={{
-              fontSize: '11px',
-              fontFamily: 'monospace',
-              color: '#ccc',
-              textAlign: 'center',
-              backgroundColor: 'rgba(255,255,255,0.1)',
-              padding: '4px',
-              borderRadius: '4px'
-            }}>
-              {selectedColor}
-            </div>
-          </div>
-
-          {/* Statistiques */}
-          <div style={{
-            backgroundColor: 'rgba(0,0,0,0.9)',
-            padding: '14px',
-            borderRadius: '10px',
-            color: 'white',
-            fontSize: '13px',
-            border: '1px solid rgba(255,255,255,0.2)',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
-          }}>
-            <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', fontWeight: 'bold' }}>
-              📊 Statistiques
-            </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Zoom:</span> <strong style={{ color: '#3b82f6' }}>{zoom}</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Pixels:</span> <strong style={{ color: '#10b981' }}>{pixels.length}</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Connecté:</span> <strong style={{ color: isAuthenticated ? '#10b981' : '#ef4444' }}>{isAuthenticated ? '✅ Oui' : '❌ Non'}</strong>
-              </div>
-              {isAuthenticated && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Utilisateur:</span> <strong style={{ color: '#8b5cf6' }}>
-                    {(() => {
-                      const userData = typeof window !== 'undefined' ? localStorage.getItem('wplace_current_user') : null;
-                      return userData ? JSON.parse(userData).user.username : 'Inconnu';
-                    })()}
-                  </strong>
-                </div>
-              )}
-            </div>
-
-            {cooldownRemaining > 0 ? (
-              <div style={{
-                marginTop: '10px',
-                padding: '8px',
-                backgroundColor: 'rgba(251, 191, 36, 0.1)',
-                borderRadius: '6px',
-                border: '1px solid rgba(251, 191, 36, 0.3)',
-                textAlign: 'center'
-              }}>
-                <div style={{ color: '#fbbf24', fontSize: '12px', fontWeight: 'bold' }}>
-                  ⏱️ Cooldown: {Math.ceil(cooldownRemaining / 1000)}s
-                </div>
-                <div style={{
-                  width: '100%',
-                  height: '4px',
-                  backgroundColor: 'rgba(251, 191, 36, 0.3)',
-                  borderRadius: '2px',
-                  marginTop: '5px',
-                  overflow: 'hidden'
-                }}>
-                  <div style={{
-                    width: `${100 - (cooldownRemaining / 30000) * 100}%`,
-                    height: '100%',
-                    backgroundColor: '#fbbf24',
-                    transition: 'width 1s linear'
-                  }}></div>
-                </div>
+                >
+                  Se déconnecter
+                </button>
               </div>
             ) : (
-              <div style={{
-                marginTop: '10px',
-                padding: '8px',
-                backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                borderRadius: '6px',
-                border: '1px solid rgba(16, 185, 129, 0.3)',
-                color: '#10b981',
-                textAlign: 'center',
-                fontSize: '12px',
-                fontWeight: 'bold'
-              }}>
-                ✅ Prêt à placer !
+              <div>
+                <div style={{ marginBottom: '12px', color: '#fbbf24' }}>
+                  ⚠️ Non connecté
+                </div>
+                <button
+                  onClick={handleLogin}
+                  style={{
+                    width: '100%',
+                    padding: '8px',
+                    backgroundColor: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  Se connecter
+                </button>
               </div>
             )}
           </div>
 
-          {/* Instructions */}
+          {/* Palette de couleurs */}
+          {isAuthenticated && (
+            <div style={{
+              position: 'absolute',
+              top: '60px',
+              left: '10px',
+              zIndex: 1000,
+              backgroundColor: 'rgba(0,0,0,0.9)',
+              padding: '16px',
+              borderRadius: '10px',
+              color: 'white',
+              border: '1px solid rgba(255,255,255,0.2)',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+            }}>
+              <div style={{ fontWeight: 'bold', marginBottom: '12px', color: '#f59e0b' }}>
+                🎨 Couleurs
+              </div>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: '4px',
+                marginBottom: '12px'
+              }}>
+                {colors.map((color) => (
+                  <button
+                    key={color}
+                    onClick={() => setSelectedColor(color)}
+                    style={{
+                      width: '24px',
+                      height: '24px',
+                      backgroundColor: color,
+                      border: selectedColor === color ? '2px solid #60a5fa' : '1px solid #444',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      boxShadow: selectedColor === color ? '0 0 8px rgba(96, 165, 250, 0.5)' : 'none'
+                    }}
+                    title={color}
+                  />
+                ))}
+              </div>
+
+              <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                Sélectionné: <span style={{ color: selectedColor, fontWeight: 'bold' }}>{selectedColor}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Panneau de contrôle */}
           <div style={{
+            position: 'absolute',
+            bottom: '20px',
+            left: '10px',
+            zIndex: 1000,
             backgroundColor: 'rgba(0,0,0,0.9)',
-            padding: '12px',
+            padding: '16px',
             borderRadius: '10px',
             color: 'white',
-            fontSize: '11px',
+            fontSize: '12px',
+            maxWidth: '300px',
             border: '1px solid rgba(255,255,255,0.2)',
             boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
           }}>
-            <div style={{ fontWeight: 'bold', marginBottom: '6px' }}>📋 Comment jouer:</div>
-            <div style={{ lineHeight: '1.4' }}>
-              1. 🎨 Choisir une couleur<br />
-              2. {isAuthenticated ? '🖱️ Cliquer sur la carte' : '🔐 Se connecter'}<br />
-              3. ⏱️ Attendre 30 secondes<br />
-              4. 🌍 Défiler horizontalement = monde infini !
-            </div>
-          </div>
-
-          {/* Debug et grille de pixels */}
-          <div style={{
-            backgroundColor: 'rgba(0,0,0,0.9)',
-            padding: '12px',
-            borderRadius: '10px',
-            color: 'white',
-            fontSize: '11px',
-            border: '1px solid rgba(255,255,255,0.2)',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
-          }}>
-            <div style={{ fontWeight: 'bold', marginBottom: '6px' }}>🔧 Debug & Grille:</div>
-            <div style={{ lineHeight: '1.4' }}>
-              • Status: {isAuthenticated ? '🟢 Connecté' : '🔴 Déconnecté'}<br />
-              • Cooldown: {cooldownRemaining > 0 ? '🔴 Actif' : '🟢 Prêt'}<br />
-              • Zoom actuel: <strong>{zoom}</strong><br />
-              • Clic pour placer: {isAuthenticated && canPlacePixel ? '🟢 OK' : '🔴 Non'}
+            <div style={{ fontWeight: 'bold', marginBottom: '8px', color: '#22d3ee' }}>
+              🌍 WorldPlace - Status
             </div>
 
-            {/* Grille de test */}
-            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.2)' }}>
-              <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>🎯 Test rapide:</div>
-              <button
-                onClick={() => {
-                  if (mapInstanceRef.current && isAuthenticated) {
-                    const center = mapInstanceRef.current.getCenter();
-                    placePixel(center.lat, center.lng);
-                  } else {
-                    alert('Connectez-vous d\'abord !');
-                  }
-                }}
-                style={{
-                  width: '100%',
-                  padding: '6px',
-                  backgroundColor: isAuthenticated ? '#10b981' : '#6b7280',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  fontSize: '10px',
-                  cursor: 'pointer'
-                }}
-                disabled={!isAuthenticated || !canPlacePixel}
-              >
-                {isAuthenticated ? 'Placer pixel ici' : 'Se connecter d\'abord'}
-              </button>
+            <div style={{ lineHeight: '1.4', marginBottom: '12px' }}>
+              <div>🔍 Zoom: <strong>{zoom}</strong> {zoom < GRID_CONFIG.MIN_ZOOM_VISIBLE ? '(trop faible pour pixels)' : ''}</div>
+              <div>📊 Pixels affichés: <strong>{pixels.length}</strong></div>
+              <div>⏱️ Cooldown: {cooldownRemaining > 0 ? `🔴 ${cooldownRemaining}s` : '🟢 Prêt'}</div>
+              <div>🎯 Placement: {isAuthenticated && canPlacePixel && zoom >= GRID_CONFIG.MIN_ZOOM_VISIBLE ? '🟢 Actif' : '🔴 Inactif'}</div>
+            </div>
+
+            {previewPixel && (
+              <div style={{
+                padding: '8px',
+                backgroundColor: 'rgba(96, 165, 250, 0.2)',
+                borderRadius: '6px',
+                marginBottom: '8px',
+                border: '1px solid rgba(96, 165, 250, 0.3)'
+              }}>
+                <div style={{ fontWeight: 'bold', color: '#60a5fa' }}>🎯 Preview:</div>
+                <div>Grid: ({previewPixel.gridX}, {previewPixel.gridY})</div>
+                <div>Coord: ({previewPixel.lat.toFixed(6)}, {previewPixel.lng.toFixed(6)})</div>
+              </div>
+            )}
+
+            <div style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
+              💡 Zoomez à {GRID_CONFIG.MIN_ZOOM_VISIBLE}+ pour voir et placer des pixels
             </div>
           </div>
-        </div>
+        </>
       )}
 
-      {/* Message de connexion */}
+      {/* Message de connexion pour utilisateurs non authentifiés */}
       {!isAuthenticated && (
         <div style={{
           position: 'absolute',
@@ -552,7 +681,7 @@ const LeafletMapDynamic: React.FC<LeafletMapProps> = ({ userId, isAuthenticated,
           fontWeight: 'bold',
           boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
         }}>
-          🔐 Connectez-vous pour placer des pixels
+          🔐 Connectez-vous pour participer au WorldPlace !
         </div>
       )}
     </div>

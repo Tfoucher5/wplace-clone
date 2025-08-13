@@ -2,17 +2,17 @@
   "name": "wplace-clone",
   "version": "1.0.0",
   "private": true,
-    "scripts": {
-      "dev": "next dev",
-      "dev:next": "next dev",
-      "dev:ws": "ts-node --transpile-only server/websocket.ts",
-      "dev:full": "concurrently \"npm run dev:next\" \"npm run dev:ws\"",
-      "build": "next build"
-    },
+  "scripts": {
+    "dev": "next dev",
+    "dev:next": "next dev",
+    "dev:ws": "ts-node --transpile-only server/websocket.ts",
+    "dev:full": "concurrently \"npm run dev:next\" \"npm run dev:ws\"",
+    "build": "next build"
+  },
   "dependencies": {
     "@types/bcryptjs": "^2.4.4",
     "@types/jsonwebtoken": "^9.0.3",
-    "@types/leaflet": "^1.9.8",
+    "@types/leaflet": "^1.9.20",
     "@types/node": "^20.0.0",
     "@types/pg": "^8.10.7",
     "@types/react": "^18.0.0",
